@@ -5,7 +5,7 @@ library(ezStan) #install via: remotes::install_github('mike-lawrence/ezStan') ; 
 #generate some fake data ----
 
 #simulation parameters
-N = 500 #subject per group
+N = 50 #subject per group
 cor_a1 = .5
 cor_a2 = .5
 cor_b1 = .2
@@ -137,3 +137,33 @@ ezStan::start_stan(
 
 #watch the sampling progress
 ezStan::watch_stan()
+
+#when done, collect
+post = ezStan::collect_stan() #ignore warnings
+
+check_hmc_diagnostics(post) #pay attention to any warnings here!
+
+#check rhat and ess
+monitor(post)
+
+# #take a look at the summary for a few variables
+# commented-out bc there's a bug in naming I just discovered
+# ezStan::stan_summary(
+# 	from_stan = post
+# 	, par = 'coef_means'
+# )
+#
+# ezStan::stan_summary(
+# 	from_stan = post
+# 	, par = 'coef_sds'
+# )
+#
+# ezStan::stan_summary(
+# 	from_stan = post
+# 	, par = 'cor_mat'
+# ) %>%
+# 	print(n=Inf)
+
+#get the posterior on cor_mat
+cor_mat = rstan::extract(post,par='cor_mat')[[1]]
+permuted
