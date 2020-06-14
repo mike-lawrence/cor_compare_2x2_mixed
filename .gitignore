@@ -1,3 +1,4 @@
 # Specify filepatterns you want git to ignore.
-.rds
+*.rds
 stan_temp/
+.Rproj.user
