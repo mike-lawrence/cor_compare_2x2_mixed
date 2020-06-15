@@ -5,17 +5,17 @@ library(ezStan) #install via: remotes::install_github('mike-lawrence/ezStan') ; 
 #generate some fake data ----
 
 #simulation parameters
-N = 50 #subject per group
-cor_a1 = .5
-cor_a2 = .5
-cor_b1 = .2
-cor_b2 = .6
+N = 1000 #subject per group
+cor_a1 = .1
+cor_a2 = .6
+cor_b1 = .4
+cor_b2 = .9
 
 
 #generate data
 tibble(
 	group = c('a','a','b','b')
-	, condition = c('1','2','1','2')
+	, condition = c('x','y','x','y')
 	, cor = c(cor_a1,cor_a2,cor_b1,cor_b2)
 ) %>%
 	dplyr::group_by(
@@ -53,12 +53,6 @@ obs_data %>%
 #reshape the data a bit
 obs_data %>%
 	dplyr::ungroup() %>%
-	#ensure the data are sorted (I *think* the stan code assumes sorted-by-id-first)
-	dplyr::arrange(
-		id
-		, condition
-		, group
-	) %>%
 	#gather and unite measure with condition for a 4-level variable
 	tidyr::gather(
 		key = measure
@@ -70,58 +64,23 @@ obs_data %>%
 		measure_condition
 		, measure
 		, condition
-	) ->
-	obs_data_long
-
-#get the within-subject contrast matrix
-obs_data_long %>%
-	ezStan::get_contrast_matrix(
-		formula = ~0+measure_condition #"0+" makes toggles indicator contrasts
-		, contrast_kind = 'contr.treatment'
-	) ->
-	W
-
-#double-check the unique contrasts are what we expect
-W %>%
-	tibble::as_tibble() %>%
-	dplyr::distinct() %>%
-	View()
-
-#reduce data to 1 row per subject then generate between-Ss contrasts
-obs_data_long %>%
-	dplyr::group_by(
-		id
-		, group
 	) %>%
-	dplyr::summarize(
-		.groups='drop'
+	#spread to wide
+	tidyr::spread(
+		key = measure_condition
+		, value = value
 	) ->
-	obs_id_group
+	obs_data_wide
 
-obs_id_group %>%
-	get_contrast_matrix(
-		formula = ~ 0 + group #"0+" makes toggles indicator contrasts
-		, contrast_kind = 'contr.treatment'
-	) ->
-	B
-
-#double-check the unique contrasts are what we expect
-B %>%
-	tibble::as_tibble() %>%
-	dplyr::distinct() %>%
-	View()
+print(obs_data_wide)
 
 #prep data for Stan
 data_for_stan = list(
-	nSubj = length(unique(obs_data_long$id))
-	, nY = nrow(W)
-	, nW = ncol(W)
-	, nB = ncol(B)
-	, Y = obs_data_long$value
-	, W = W
-	, B = B
-	, subjIndices = ezStan::get_subject_indices(obs_data_long$id)
-	, groupMembership = as.numeric(factor(obs_id_group$group)) #1/2 indicating group
+	nSubj = nrow(obs_data_wide)
+	, nW = ncol(obs_data_wide)-2
+	, nB = length(unique(obs_data_wide$group))
+	, Y = obs_data_wide %>% dplyr::select(-group,-id)
+	, groupMembership = as.numeric(factor(obs_data_wide$group)) #1/2 indicating group
 )
 
 # sample using Stan ----
@@ -166,4 +125,58 @@ monitor(post)
 
 #get the posterior on cor_mat
 cor_mat = rstan::extract(post,par='cor_mat')[[1]]
-permuted
+str(cor_mat) #first dim is sample number, 2nd is group, then 4x4 correlation matrix
+
+group1_cor_diff = rep(NA,dim(cor_mat)[1])
+group2_cor_diff = rep(NA,dim(cor_mat)[1])
+var = obs_data_wide %>% dplyr::select(-group,-id) %>% names()
+for(i in 1:dim(cor_mat)[1]){
+	group1_cor_diff[i] =
+		cor_mat[i,1,var=='V1_x',var=='V2_x'] -
+		cor_mat[i,1,var=='V1_y',var=='V2_y']
+	group2_cor_diff[i] =
+		cor_mat[i,2,var=='V1_x',var=='V2_x'] -
+		cor_mat[i,2,var=='V1_y',var=='V2_y']
+}
+
+cor_diffs = tibble(
+	group1 = group1_cor_diff
+	, group2 = group2_cor_diff
+	, sample_num = 1:length(group1_cor_diff)
+)
+
+#view the posterior for each group's difference
+cor_diffs %>%
+	tidyr::gather(
+		key = group
+		, value = value
+		, -sample_num
+	) %>%
+	ggplot()+
+	facet_wrap(
+		~ group
+	)+
+	geom_histogram(
+		mapping = aes(
+			x = value
+		)
+	)
+
+#compute the difference-of-differences
+cor_diffs %>%
+	dplyr::mutate(
+		double_diff = group1 - group2
+	) ->
+	cor_diffs
+
+#histogram
+cor_diffs %>%
+	ggplot()+
+	geom_histogram(
+		mapping = aes(
+			x = double_diff
+		)
+	)
+
+#median & 95% credible interval
+quantile(cor_diffs$double_diff,c(.5,.025,.975))
